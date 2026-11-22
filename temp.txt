@@ -1,0 +1,681 @@
+    def capture_window(self, window_title):
+        try:
+            print(f"[DEBUG] 开始捕获窗口: {window_title}")
+            hwnd = win32gui.FindWindow(None, window_title)
+            if not hwnd:
+                print("[DEBUG] 未找到窗口句柄")
+                return None
+
+            # 方法1: 使用BitBlt捕获窗口
+            try:
+                left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+                width = right - left
+                height = bottom - top
+                
+                hwndDC = win32gui.GetWindowDC(hwnd)
+                mfcDC = win32ui.CreateDCFromHandle(hwndDC)
+                saveDC = mfcDC.CreateCompatibleDC()
+                saveBitMap = win32ui.CreateBitmap()
+                saveBitMap.CreateCompatibleBitmap(mfcDC, width, height)
+                saveDC.SelectObject(saveBitMap)
+                result = saveDC.BitBlt((0, 0), (width, height), mfcDC, (0, 0), win32con.SRCCOPY)
+                
+                if result is None:
+                    bmpinfo = saveBitMap.GetInfo()
+                    bmpstr = saveBitMap.GetBitmapBits(True)
+                    img = np.frombuffer(bmpstr, dtype='uint8').reshape((bmpinfo['bmHeight'], bmpinfo['bmWidth'], 4))
+                    img = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+                    
+                    win32gui.DeleteObject(saveBitMap.GetHandle())
+                    saveDC.DeleteDC()
+                    mfcDC.DeleteDC()
+                    win32gui.ReleaseDC(hwnd, hwndDC)
+                    
+                    print("✅ 方法1: 使用BitBlt捕获窗口成功")
+                    return self._post_process(img)
+            except Exception as e:
+                print(f"⚠️ 方法1: BitBlt捕获失败: {str(e)}")
+
+            # 方法2: 使用Desktop Duplication API捕获窗口
+            try:
+                import dxcam
+                camera = dxcam.create()
+                rect = win32gui.GetWindowRect(hwnd)
+                img = camera.grab(region=rect)
+                if img is not None:
+                    print("✅ 方法2: 使用Desktop Duplication API捕获窗口成功")
+                    return self._post_process(img)
+                raise Exception("返回空图像")
+            except Exception as e:
+                print(f"⚠️ 方法2: Desktop Duplication API失败: {str(e)}")
+
+            # 方法3: 使用Magnification API捕获窗口
+            try:
+                mag_lib = ctypes.WinDLL('Magnification.dll')
+                mag_lib.MagInitialize()
+                
+                hwnd_mag = win32gui.FindWindow("Magpie_CaptureWindowClass", None)
+                if not hwnd_mag:
+                    hwnd_mag = win32gui.CreateWindowEx(
+                        0, "Magpie_CaptureWindowClass", "MagpieCapture",
+                        win32con.WS_POPUP, 0, 0, 0, 0, None, None, None, None
+                    )
+                
+                rect = win32gui.GetWindowRect(hwnd)
+                width = rect[2] - rect[0]
+                height = rect[3] - rect[1]
+                
+                mag_lib.MagSetWindowSource(hwnd_mag, ctypes.wintypes.RECT(*rect))
+                mag_lib.MagSetWindowFilterList(hwnd_mag, 0, 0, None)
+                
+                hdc = win32gui.GetDC(hwnd_mag)
+                mfcDC = win32ui.CreateDCFromHandle(hdc)
+                saveDC = mfcDC.CreateCompatibleDC()
+                saveBitMap = win32ui.CreateBitmap()
+                saveBitMap.CreateCompatibleBitmap(mfcDC, width, height)
+                saveDC.SelectObject(saveBitMap)
+                saveDC.BitBlt((0, 0), (width, height), mfcDC, (0, 0), win32con.SRCCOPY)
+                
+                bmpinfo = saveBitMap.GetInfo()
+                bmpstr = saveBitMap.GetBitmapBits(True)
+                img = np.frombuffer(bmpstr, dtype='uint8').reshape((bmpinfo['bmHeight'], bmpinfo['bmWidth'], 4))
+                img = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+                
+                win32gui.DeleteObject(saveBitMap.GetHandle())
+                saveDC.DeleteDC()
+                mfcDC.DeleteDC()
+                win32gui.ReleaseDC(hwnd_mag, hdc)
+                mag_lib.MagUninitialize()
+                
+                print("✅ 方法3: 使用Magnification API捕获窗口成功")
+                return self._post_process(img)
+            except Exception as e:
+                print(f"⚠️ 方法3: Magnification API失败: {str(e)}")
+
+            # 方法4: 使用UIAutomation API捕获窗口
+            try:
+                from comtypes.client import CreateObject
+                from comtypes.gen.UIAutomationClient import CUIAutomation, IUIAutomationElement
+                
+                uia = CreateObject(CUIAutomation)
+                element = uia.ElementFromHandle(hwnd)
+                rect = element.CurrentBoundingRectangle
+                
+                left, top, width, height = rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top
+                screenshot = ImageGrab.grab(bbox=(left, top, left + width, top + height))
+                img = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
+                
+                print("✅ 方法4: 使用UIAutomation API捕获窗口成功")
+                return self._post_process(img)
+            except Exception as e:
+                print(f"⚠️ 方法4: UIAutomation API失败: {str(e)}")
+
+            # 方法5: 使用PIL截图作为回退方案
+            try:
+                left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+                screenshot = ImageGrab.grab(bbox=(left, top, right, bottom))
+                img = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
+                print("✅ 方法5: 使用PIL截图作为回退方案成功")
+                return self._post_process(img)
+            except Exception as e:
+                print(f"⚠️ 方法5: PIL截图失败: {str(e)}")
+
+            # 方法6: 使用DXGI/DirectX捕获
+            try:
+                comtypes.CoInitialize()
+                D3D11CreateDevice = ctypes.windll.d3d11.D3D11CreateDevice
+                
+                device = c_void_p()
+                hr = D3D11CreateDevice(
+                    None, ctypes.c_int(1), None, 0, None, 0, 
+                    ctypes.c_int(7), byref(device), None, None
+                )
+                if hr != 0:
+                    raise Exception(f"D3D11CreateDevice failed with HRESULT: {hr}")
+                
+                dxgi_device = POINTER(ctypes.c_void_p)()
+                hr = device.QueryInterface(
+                    GUID("{54ec77fa-1377-44e6-8c32-88fd5f44c84c}"), 
+                    byref(dxgi_device)
+                )
+                
+                adapter = POINTER(ctypes.c_void_p)()
+                hr = dxgi_device.GetAdapter(byref(adapter))
+                
+                output = POINTER(ctypes.c_void_p)()
+                hr = adapter.EnumOutputs(0, byref(output))
+                
+                duplication = POINTER(ctypes.c_void_p)()
+                hr = output.DuplicateOutput(device, byref(duplication))
+                
+                frame_info = ctypes.c_void_p()
+                desktop_resource = POINTER(ctypes.c_void_p)()
+                hr = duplication.AcquireNextFrame(1000, byref(frame_info), byref(desktop_resource))
+                
+                texture = POINTER(ctypes.c_void_p)()
+                hr = desktop_resource.QueryInterface(
+                    GUID("{6f15aaf2-d208-4e89-9ab4-489535d34f9c}"), 
+                    byref(texture)
+                )
+                
+                mapped_rect = ctypes.c_void_p()
+                hr = texture.Map(0, byref(mapped_rect))
+                
+                desc = ctypes.c_void_p()
+                output.GetDesc(byref(desc))
+                
+                img = np.frombuffer(
+                    mapped_rect.pBits, 
+                    dtype=np.uint8, 
+                    count=desc.ModeDesc.Width * desc.ModeDesc.Height * 4
+                ).reshape((desc.ModeDesc.Height, desc.ModeDesc.Width, 4))
+                
+                img = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+                
+                texture.Unmap(0)
+                duplication.ReleaseFrame()
+                comtypes.CoUninitialize()
+                
+                print("✅ 方法6: 使用DXGI/DirectX捕获成功")
+                return self._post_process(img)
+            except Exception as e:
+                print(f"⚠️ 方法6: DXGI/DirectX捕获失败: {str(e)}")
+
+            # 方法7: 使用MSS跨平台捕获
+            try:
+                from mss import mss
+                with mss() as sct:
+                    left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+                    monitor = {"top": top, "left": left, "width": right - left, "height": bottom - top}
+                    sct_img = sct.grab(monitor)
+                    img = np.array(sct_img)
+                    img = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+                    print("✅ 方法7: 使用MSS跨平台捕获成功")
+                    return self._post_process(img)
+            except Exception as e:
+                print(f"⚠️ 方法7: MSS跨平台捕获失败: {str(e)}")
+
+            # 方法8: 使用Windows GraphicsCapture API (Win10+)
+            try:
+                item = gc.Capture.create_for_window(hwnd)
+                frame = item.capture_frame()
+                img = np.array(frame)
+                img = cv2.cvtColor(img, cv2.COLOR_RGBA2BGR)
+                print("✅ 方法8: 使用Windows GraphicsCapture API捕获成功")
+                return self._post_process(img)
+            except Exception as e:
+                print(f"⚠️ 方法8: Windows GraphicsCapture API失败: {str(e)}")
+
+            # 方法9: 使用OpenCV截图
+            try:
+                left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+                width = right - left
+                height = bottom - top
+                
+                hwndDC = win32gui.GetWindowDC(hwnd)
+                mfcDC = win32ui.CreateDCFromHandle(hwndDC)
+                saveDC = mfcDC.CreateCompatibleDC()
+                saveBitMap = win32ui.CreateBitmap()
+                saveBitMap.CreateCompatibleBitmap(mfcDC, width, height)
+                saveDC.SelectObject(saveBitMap)
+                saveDC.BitBlt((0, 0), (width, height), mfcDC, (0, 0), win32con.SRCCOPY)
+                
+                bmpinfo = saveBitMap.GetInfo()
+                bmpstr = saveBitMap.GetBitmapBits(True)
+                img = np.frombuffer(bmpstr, dtype='uint8').reshape((bmpinfo['bmHeight'], bmpinfo['bmWidth'], 4))
+                img = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+                
+                win32gui.DeleteObject(saveBitMap.GetHandle())
+                saveDC.DeleteDC()
+                mfcDC.DeleteDC()
+                win32gui.ReleaseDC(hwnd, hwndDC)
+                
+                print("✅ 方法9: 使用OpenCV截图成功")
+                return self._post_process(img)
+            except Exception as e:
+                print(f"⚠️ 方法9: OpenCV截图失败: {str(e)}")
+
+            # 方法10: 捕获窗口客户区
+            try:
+                left, top, right, bottom = win32gui.GetClientRect(hwnd)
+                client_left, client_top = win32gui.ClientToScreen(hwnd, (left, top))
+                client_right, client_bottom = win32gui.ClientToScreen(hwnd, (right, bottom))
+                
+                width = client_right - client_left
+                height = client_bottom - client_top
+                
+                hwndDC = win32gui.GetWindowDC(hwnd)
+                mfcDC = win32ui.CreateDCFromHandle(hwndDC)
+                saveDC = mfcDC.CreateCompatibleDC()
+                saveBitMap = win32ui.CreateBitmap()
+                saveBitMap.CreateCompatibleBitmap(mfcDC, width, height)
+                saveDC.SelectObject(saveBitMap)
+                saveDC.BitBlt((0, 0), (width, height), mfcDC, (0, 0), win32con.SRCCOPY)
+                
+                bmpinfo = saveBitMap.GetInfo()
+                bmpstr = saveBitMap.GetBitmapBits(True)
+                img = np.frombuffer(bmpstr, dtype='uint8').reshape((bmpinfo['bmHeight'], bmpinfo['bmWidth'], 4))
+                img = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+                
+                win32gui.DeleteObject(saveBitMap.GetHandle())
+                saveDC.DeleteDC()
+                mfcDC.DeleteDC()
+                win32gui.ReleaseDC(hwnd, hwndDC)
+                
+                print("✅ 方法10: 捕获窗口客户区成功")
+                return self._post_process(img)
+            except Exception as e:
+                print(f"⚠️ 方法10: 捕获窗口客户区失败: {str(e)}")
+
+            # 方法11: 使用Windows.Graphics.Capture API (Win10 1809+)
+            try:
+                item = GraphicsCaptureItem.create_from_window_id(hwnd)
+                frame_pool = item.create_frame_pool(d3d11.Direct3D11Device(), 2)
+                session = frame_pool.create_session()
+                session.start_capture()
+                
+                frame = frame_pool.try_get_next_frame()
+                if frame:
+                    software_bitmap = frame.surface.as_software_bitmap()
+                    img = np.array(software_bitmap)
+                    img = cv2.cvtColor(img, cv2.COLOR_RGBA2BGR)
+                    print("✅ 方法11: 使用Windows.Graphics.Capture API捕获成功")
+                    return self._post_process(img)
+                raise Exception("No frame captured")
+            except Exception as e:
+                print(f"⚠️ 方法11: Windows.Graphics.Capture API失败: {str(e)}")
+
+            # 方法12: 使用DWM API捕获窗口
+            try:
+                rect = win32gui.GetWindowRect(hwnd)
+                width = rect[2] - rect[0]
+                height = rect[3] - rect[1]
+                
+                dwm = ctypes.windll.dwmapi
+                thumb_properties = ctypes.c_void_p()
+                hthumb = ctypes.c_void_p()
+                
+                dwm.DwmRegisterThumbnail(hwnd, win32gui.GetDesktopWindow(), ctypes.byref(hthumb))
+                dwm.DwmQueryThumbnailSourceSize(hthumb, ctypes.byref(thumb_properties))
+                
+                hdc = win32gui.GetDC(0)
+                mfcDC = win32ui.CreateDCFromHandle(hdc)
+                saveDC = mfcDC.CreateCompatibleDC()
+                saveBitMap = win32ui.CreateBitmap()
+                saveBitMap.CreateCompatibleBitmap(mfcDC, width, height)
+                saveDC.SelectObject(saveBitMap)
+                
+                dwm.DwmUpdateThumbnailProperties(hthumb, thumb_properties)
+                saveDC.BitBlt((0, 0), (width, height), mfcDC, (rect[0], rect[1]), win32con.SRCCOPY)
+                
+                bmpinfo = saveBitMap.GetInfo()
+                bmpstr = saveBitMap.GetBitmapBits(True)
+                img = np.frombuffer(bmpstr, dtype='uint8').reshape((bmpinfo['bmHeight'], bmpinfo['bmWidth'], 4))
+                img = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+                
+                win32gui.DeleteObject(saveBitMap.GetHandle())
+                saveDC.DeleteDC()
+                mfcDC.DeleteDC()
+                win32gui.ReleaseDC(0, hdc)
+                dwm.DwmUnregisterThumbnail(hthumb)
+                
+                print("✅ 方法12: 使用DWM API捕获窗口成功")
+                return self._post_process(img)
+            except Exception as e:
+                print(f"⚠️ 方法12: DWM API捕获失败: {str(e)}")
+
+            # 方法13: 使用GDI+捕获窗口
+            try:
+                left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+                width = right - left
+                height = bottom - top
+                
+                hwndDC = win32gui.GetWindowDC(hwnd)
+                mfcDC = win32ui.CreateDCFromHandle(hwndDC)
+                saveDC = mfcDC.CreateCompatibleDC()
+                saveBitMap = win32ui.CreateBitmap()
+                saveBitMap.CreateCompatibleBitmap(mfcDC, width, height)
+                saveDC.SelectObject(saveBitMap)
+                saveDC.BitBlt((0, 0), (width, height), mfcDC, (0, 0), win32con.SRCCOPY)
+                
+                bmpinfo = saveBitMap.GetInfo()
+                bmpstr = saveBitMap.GetBitmapBits(True)
+                img = np.frombuffer(bmpstr, dtype='uint8').reshape((bmpinfo['bmHeight'], bmpinfo['bmWidth'], 4))
+                img = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+                
+                win32gui.DeleteObject(saveBitMap.GetHandle())
+                saveDC.DeleteDC()
+                mfcDC.DeleteDC()
+                win32gui.ReleaseDC(hwnd, hwndDC)
+                
+                print("✅ 方法13: 使用GDI+捕获窗口成功")
+                return self._post_process(img)
+            except Exception as e:
+                print(f"⚠️ 方法13: GDI+捕获失败: {str(e)}")
+
+            # 方法14: 使用DirectX捕获窗口
+            try:
+                import dxcam
+                camera = dxcam.create(device_idx=0, output_idx=0)
+                rect = win32gui.GetWindowRect(hwnd)
+                img = camera.grab(region=rect)
+                if img is not None:
+                    print("✅ 方法14: 使用DirectX捕获窗口成功")
+                    return self._post_process(img)
+                raise Exception("返回空图像")
+            except Exception as e:
+                print(f"⚠️ 方法14: DirectX捕获失败: {str(e)}")
+
+            # 方法15: 使用Windows Screenshot API
+            try:
+                left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+                screenshot = ImageGrab.grab(bbox=(left, top, right, bottom))
+                img = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
+                print("✅ 方法15: 使用Windows Screenshot API捕获成功")
+                return self._post_process(img)
+            except Exception as e:
+                print(f"⚠️ 方法15: Windows Screenshot API失败: {str(e)}")
+
+            # 方法16: 使用DXGI表面共享捕获
+            try:
+                import dxcam
+                camera = dxcam.create(device_idx=0, output_idx=0)
+                rect = win32gui.GetWindowRect(hwnd)
+                img = camera.grab(region=rect)
+                if img is not None:
+                    print("✅ 方法16: 使用DXGI表面共享捕获成功")
+                    return self._post_process(img)
+                raise Exception("返回空图像")
+            except Exception as e:
+                print(f"⚠️ 方法16: DXGI表面共享捕获失败: {str(e)}")
+
+            # 方法17: 使用Windows.Media.Capture API
+            try:
+                media_capture = MediaCapture()
+                media_capture.initialize_async().get()
+                
+                frame = media_capture.get_preview_frame()
+                if frame:
+                    software_bitmap = frame.video_media_frame.software_bitmap
+                    img = np.array(software_bitmap)
+                    img = cv2.cvtColor(img, cv2.COLOR_RGBA2BGR)
+                    print("✅ 方法17: 使用Windows.Media.Capture API捕获成功")
+                    return self._post_process(img)
+                raise Exception("No frame captured")
+            except Exception as e:
+                print(f"⚠️ 方法17: Windows.Media.Capture API失败: {str(e)}")
+
+            # 方法18: 使用Direct3D9表面捕获
+            try:
+                import d3d9
+                d3d = d3d9.Direct3DCreate9(d3d9.D3D_SDK_VERSION)
+                
+                rect = win32gui.GetWindowRect(hwnd)
+                width = rect[2] - rect[0]
+                height = rect[3] - rect[1]
+                
+                device = d3d.create_device(
+                    d3d9.D3DADAPTER_DEFAULT, d3d9.D3DDEVTYPE_HAL, hwnd,
+                    d3d9.D3DCREATE_SOFTWARE_VERTEXPROCESSING,
+                    d3d9.D3DPRESENT_PARAMETERS(
+                        BackBufferWidth=width,
+                        BackBufferHeight=height,
+                        BackBufferFormat=d3d9.D3DFMT_A8R8G8B8,
+                        SwapEffect=d3d9.D3DSWAPEFFECT_DISCARD
+                    )
+                )
+                
+                surface = device.create_offscreen_plain_surface(width, height, d3d9.D3DFMT_A8R8G8B8)
+                device.get_front_buffer_data(0, surface)
+                
+                locked_rect = surface.lock_rect()
+                img = np.frombuffer(locked_rect.pBits, dtype=np.uint8).reshape((height, width, 4))
+                img = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+                surface.unlock_rect()
+                
+                print("✅ 方法18: 使用Direct3D9表面捕获成功")
+                return self._post_process(img)
+            except Exception as e:
+                print(f"⚠️ 方法18: Direct3D9表面捕获失败: {str(e)}")
+
+            # 方法19: 使用Windows AI Vision API
+            try:
+                from winrt.windows.media.capture.frames import MediaFrameReader, MediaFrameSourceKind
+                from winrt.windows.graphics.imaging import SoftwareBitmap
+                
+                media_capture = MediaCapture()
+                media_capture.initialize_async().get()
+                
+                frame_source = media_capture.frame_sources.get_first_by_kind(MediaFrameSourceKind.VIDEO_PREVIEW)
+                frame_reader = media_capture.create_frame_reader_async(frame_source).get()
+                frame_reader.start_async().get()
+                
+                frame = frame_reader.try_acquire_latest_frame()
+                if frame:
+                    software_bitmap = frame.video_media_frame.software_bitmap
+                    img = np.array(software_bitmap)
+                    img = cv2.cvtColor(img, cv2.COLOR_RGBA2BGR)
+                    print("✅ 方法19: 使用Windows AI Vision API捕获成功")
+                    return self._post_process(img)
+                raise Exception("No frame captured")
+            except Exception as e:
+                print(f"⚠️ 方法19: Windows AI Vision API失败: {str(e)}")
+
+            # 方法20: 捕获ApplicationFrameHost窗口
+            try:
+                if "ApplicationFrameWindow" in win32gui.GetClassName(hwnd):
+                    child_hwnd = win32gui.FindWindowEx(hwnd, None, "Windows.UI.Core.CoreWindow", None)
+                    if child_hwnd:
+                        print("✅ 方法20: 捕获ApplicationFrameHost窗口成功")
+                        return self.capture_window(child_hwnd)
+                raise Exception("不是ApplicationFrameHost窗口")
+            except Exception as e:
+                print(f"⚠️ 方法20: 捕获ApplicationFrameHost窗口失败: {str(e)}")
+
+            # 方法21: Desktop Window Manager (DWM) API
+            try:
+                rect = win32gui.GetWindowRect(hwnd)
+                width = rect[2] - rect[0]
+                height = rect[3] - rect[1]
+                
+                dwm = ctypes.windll.dwmapi
+                thumb_properties = ctypes.c_void_p()
+                hthumb = ctypes.c_void_p()
+                
+                dwm.DwmRegisterThumbnail(hwnd, win32gui.GetDesktopWindow(), ctypes.byref(hthumb))
+                dwm.DwmQueryThumbnailSourceSize(hthumb, ctypes.byref(thumb_properties))
+                
+                hdc = win32gui.GetDC(0)
+                mfcDC = win32ui.CreateDCFromHandle(hdc)
+                saveDC = mfcDC.CreateCompatibleDC()
+                saveBitMap = win32ui.CreateBitmap()
+                saveBitMap.CreateCompatibleBitmap(mfcDC, width, height)
+                saveDC.SelectObject(saveBitMap)
+                
+                dwm.DwmUpdateThumbnailProperties(hthumb, thumb_properties)
+                saveDC.BitBlt((0, 0), (width, height), mfcDC, (rect[0], rect[1]), win32con.SRCCOPY)
+                
+                bmpinfo = saveBitMap.GetInfo()
+                bmpstr = saveBitMap.GetBitmapBits(True)
+                img = np.frombuffer(bmpstr, dtype='uint8').reshape((bmpinfo['bmHeight'], bmpinfo['bmWidth'], 4))
+                img = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+                
+                win32gui.DeleteObject(saveBitMap.GetHandle())
+                saveDC.DeleteDC()
+                mfcDC.DeleteDC()
+                win32gui.ReleaseDC(0, hdc)
+                dwm.DwmUnregisterThumbnail(hthumb)
+                
+                print("✅ 方法21: Desktop Window Manager (DWM) API捕获成功")
+                return self._post_process(img)
+            except Exception as e:
+                print(f"⚠️ 方法21: DWM API捕获失败: {str(e)}")
+
+            # 方法22: DirectX Capture (DXGI Desktop Duplication)
+            try:
+                comtypes.CoInitialize()
+                D3D11CreateDevice = ctypes.windll.d3d11.D3D11CreateDevice
+                
+                device = c_void_p()
+                hr = D3D11CreateDevice(
+                    None, ctypes.c_int(1), None, 0, None, 0, 
+                    ctypes.c_int(7), byref(device), None, None
+                )
+                if hr != 0:
+                    raise Exception(f"D3D11CreateDevice failed with HRESULT: {hr}")
+                
+                dxgi_device = POINTER(ctypes.c_void_p)()
+                hr = device.QueryInterface(
+                    GUID("{54ec77fa-1377-44e6-8c32-88fd5f44c84c}"), 
+                    byref(dxgi_device)
+                )
+                
+                adapter = POINTER(ctypes.c_void_p)()
+                hr = dxgi_device.GetAdapter(byref(adapter))
+                
+                output = POINTER(ctypes.c_void_p)()
+                hr = adapter.EnumOutputs(0, byref(output))
+                
+                duplication = POINTER(ctypes.c_void_p)()
+                hr = output.DuplicateOutput(device, byref(duplication))
+                
+                frame_info = ctypes.c_void_p()
+                desktop_resource = POINTER(ctypes.c_void_p)()
+                hr = duplication.AcquireNextFrame(1000, byref(frame_info), byref(desktop_resource))
+                
+                texture = POINTER(ctypes.c_void_p)()
+                hr = desktop_resource.QueryInterface(
+                    GUID("{6f15aaf2-d208-4e89-9ab4-489535d34f9c}"), 
+                    byref(texture)
+                )
+                
+                mapped_rect = ctypes.c_void_p()
+                hr = texture.Map(0, byref(mapped_rect))
+                
+                desc = ctypes.c_void_p()
+                output.GetDesc(byref(desc))
+                
+                img = np.frombuffer(
+                    mapped_rect.pBits, 
+                    dtype=np.uint8, 
+                    count=desc.ModeDesc.Width * desc.ModeDesc.Height * 4
+                ).reshape((desc.ModeDesc.Height, desc.ModeDesc.Width, 4))
+                
+                img = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+                
+                texture.Unmap(0)
+                duplication.ReleaseFrame()
+                comtypes.CoUninitialize()
+                
+                print("✅ 方法22: DirectX Capture (DXGI Desktop Duplication)捕获成功")
+                return self._post_process(img)
+            except Exception as e:
+                print(f"⚠️ 方法22: DXGI Desktop Duplication失败: {str(e)}")
+
+            # 方法23: Windows Screenshot API
+            try:
+                left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+                screenshot = ImageGrab.grab(bbox=(left, top, right, bottom))
+                img = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
+                print("✅ 方法23: Windows Screenshot API捕获成功")
+                return self._post_process(img)
+            except Exception as e:
+                print(f"⚠️ 方法23: Windows Screenshot API失败: {str(e)}")
+
+            # 方法24: DirectX Surface Sharing
+            try:
+                import dxcam
+                camera = dxcam.create()
+                rect = win32gui.GetWindowRect(hwnd)
+                img = camera.grab(region=rect)
+                if img is not None:
+                    print("✅ 方法24: DirectX Surface Sharing捕获成功")
+                    return self._post_process(img)
+                raise Exception("返回空图像")
+            except Exception as e:
+                print(f"⚠️ 方法24: DirectX Surface Sharing失败: {str(e)}")
+
+            # 方法25: Windows.Media.Capture API
+            try:
+                media_capture = MediaCapture()
+                media_capture.initialize_async().get()
+                
+                frame = media_capture.get_preview_frame()
+                if frame:
+                    software_bitmap = frame.video_media_frame.software_bitmap
+                    img = np.array(software_bitmap)
+                    img = cv2.cvtColor(img, cv2.COLOR_RGBA2BGR)
+                    print("✅ 方法25: Windows.Media.Capture API捕获成功")
+                    return self._post_process(img)
+                raise Exception("No frame captured")
+            except Exception as e:
+                print(f"⚠️ 方法25: Windows.Media.Capture API失败: {str(e)}")
+
+            # 方法26: Mirror Driver
+            try:
+                left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+                screenshot = pyautogui.screenshot(region=(left, top, right-left, bottom-top))
+                img = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
+                print("✅ 方法26: Mirror Driver捕获成功")
+                return self._post_process(img)
+            except Exception as e:
+                print(f"⚠️ 方法26: Mirror Driver失败: {str(e)}")
+
+            # 方法27: WDDM Desktop Duplication API
+            try:
+                import dxcam
+                camera = dxcam.create(device_idx=0, output_idx=0)
+                rect = win32gui.GetWindowRect(hwnd)
+                img = camera.grab(region=rect)
+                if img is not None:
+                    print("✅ 方法27: WDDM Desktop Duplication API捕获成功")
+                    return self._post_process(img)
+                raise Exception("返回空图像")
+            except Exception as e:
+                print(f"⚠️ 方法27: WDDM Desktop Duplication API失败: {str(e)}")
+
+            # 方法28: ApplicationFrameHost (UWP应用专用)
+            try:
+                if "ApplicationFrameWindow" in win32gui.GetClassName(hwnd):
+                    child_hwnd = win32gui.FindWindowEx(hwnd, None, "Windows.UI.Core.CoreWindow", None)
+                    if child_hwnd:
+                        print("✅ 方法28: ApplicationFrameHost捕获成功")
+                        return self.capture_window(child_hwnd)
+                raise Exception("不是UWP应用窗口")
+            except Exception as e:
+                print(f"⚠️ 方法28: ApplicationFrameHost捕获失败: {str(e)}")
+
+            # 方法29: 终极回退方案 - 常规GDI捕获
+            try:
+                left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+                width = right - left
+                height = bottom - top
+                
+                hwndDC = win32gui.GetWindowDC(hwnd)
+                mfcDC = win32ui.CreateDCFromHandle(hwndDC)
+                saveDC = mfcDC.CreateCompatibleDC()
+                saveBitMap = win32ui.CreateBitmap()
+                saveBitMap.CreateCompatibleBitmap(mfcDC, width, height)
+                saveDC.SelectObject(saveBitMap)
+                saveDC.BitBlt((0, 0), (width, height), mfcDC, (0, 0), win32con.SRCCOPY)
+                
+                bmpinfo = saveBitMap.GetInfo()
+                bmpstr = saveBitMap.GetBitmapBits(True)
+                img = np.frombuffer(bmpstr, dtype='uint8').reshape((bmpinfo['bmHeight'], bmpinfo['bmWidth'], 4))
+                img = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+                
+                win32gui.DeleteObject(saveBitMap.GetHandle())
+                saveDC.DeleteDC()
+                mfcDC.DeleteDC()
+                win32gui.ReleaseDC(hwnd, hwndDC)
+                
+                print("✅ 方法29: 终极回退方案 - 常规GDI捕获成功")
+                return self._post_process(img)
+            except Exception as e:
+                print(f"❌ 所有捕获方法均失败: {str(e)}")
+                return None
+
+        except Exception as e:
+            print(f"❌ 窗口捕获错误: {e}")
+            return None
+
