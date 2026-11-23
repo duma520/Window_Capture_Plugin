@@ -1,11 +1,8 @@
 # Window_Capture_Plugin （见源码内 VERSION 常量）
 
-> **一句话**：Window_Capture_Plugin —— 一个用 Python 写的 Windows 桌面程序，
+> **一句话**：窗口画面捕获插件：内置 20 种捕获方式（dxcam / mss / GDI / WinRT / UIAutomation 等），把任意前台或后台窗口的画面按帧取出来；附 FastAPI + uvicorn 服务，可被其他程序远程调用取帧，适合做自动化与视觉识别前级。
+>
 > 主程序为 `window_capture_plugin.py`，界面技术栈 命令行 / 无 GUI 依赖（终端运行）。
->
-> **适合谁**：想直接用现成工具、不想自己写代码的 Windows 用户。
->
-> **解决什么问题**：把这件事做成开箱即用的程序 —— 下载解压、装上依赖、双击就能跑。
 
 ---
 
